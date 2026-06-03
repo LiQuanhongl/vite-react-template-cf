@@ -6,7 +6,8 @@ type AppEnv = Env & {
 
 const app = new Hono<{ Bindings: AppEnv }>();
 
-const FEED_URL = "https://rsshub.app/bangumi.tv/game/followrank";
+const FEED_URL = "https://rsshub.ddsrem.com/bangumi.tv/game/followrank";
+const FALLBACK_FEED_URL = "https://rsshub.rssforever.com/bangumi.tv/game/followrank";
 
 type GameFeedItem = {
 	id: string;
@@ -67,20 +68,33 @@ const parseFeed = (xml: string): GameFeedItem[] => {
 
 app.get("/api/games", async (c) => {
 	const feedUrl = c.env.BANGUMI_GAME_FEED_URL || FEED_URL;
-	const response = await fetch(feedUrl, {
-		headers: {
-			"User-Agent": "BangumiGameBoard/1.0 (+https://workers.cloudflare.com)",
-			Accept: "application/rss+xml, application/xml, text/xml;q=0.9, */*;q=0.8",
-		},
-	});
+	const feedUrls = [feedUrl, FALLBACK_FEED_URL].filter(
+		(url, index, urls) => urls.indexOf(url) === index,
+	);
+	let body = "";
+	let source = feedUrl;
 
-	const body = await response.text();
+	for (const url of feedUrls) {
+		const response = await fetch(url, {
+			headers: {
+				"User-Agent": "BangumiGameBoard/1.0 (+https://workers.cloudflare.com)",
+				Accept: "application/rss+xml, application/xml, text/xml;q=0.9, */*;q=0.8",
+			},
+		});
 
-	if (!response.ok || !body.includes("<rss")) {
+		body = await response.text();
+		source = url;
+
+		if (response.ok && body.includes("<rss")) {
+			break;
+		}
+	}
+
+	if (!body.includes("<rss")) {
 		return c.json(
 			{
 				error: "Bangumi 游戏关注榜暂时不可用，请稍后再试。",
-				source: feedUrl,
+				source,
 			},
 			502,
 		);
@@ -88,7 +102,7 @@ app.get("/api/games", async (c) => {
 
 	return c.json(
 		{
-			source: feedUrl,
+			source,
 			updatedAt: new Date().toISOString(),
 			items: parseFeed(body),
 		},
